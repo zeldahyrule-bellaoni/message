@@ -1,117 +1,190 @@
-// stats.js
+// runStatsExtractor
+/**
+ * Collect Daily Rewards + Fashion Season Rewards
+ * Phase 1: Detect available rewards
+ * Phase 2: Collect them via POST
+ */
 module.exports = async function runStatsExtractor(page) {
-  console.log("🚀 Starting Script 2: Vote + Message from Google Sheet");
+  console.log("🎁 [BP] Starting reward collection sub-code");
 
-  // 🔗 Your published CSV
-  const CSV_URL =
-    'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEvXh5P_U89PiYbBh-yIB-jbFdBejWYEHTbLopxHo7yc4Gns77R4h4HkXMxUzFTOGaU9Jl5JimzB_A/pub?gid=0&single=true&output=csv';
+  try {
+    // ─────────────────────────────────────────────
+    // PHASE 1 — OPEN POPUP & CAPTURE RESPONSE
+    // ─────────────────────────────────────────────
 
-  // --------------------------------------------------
-  // STEP 1: LOAD CSV
-  // --------------------------------------------------
-  console.log("📥 Fetching Google Sheet CSV...");
-  const csvText = await fetch(CSV_URL).then(r => r.text());
+    console.log("📄 [BP] Navigating to profile page...");
+    await page.goto("https://v3.g.ladypopular.com/profile.php", {
+      waitUntil: "networkidle"
+    });
 
-  const lines = csvText.trim().split('\n');
-  const rows = lines.slice(1).map(line => {
-    const [profileID, ladyID, ladyName] = line.split(',');
-    return {
-      profileID: profileID?.trim(),
-      ladyID: ladyID?.trim(),
-      ladyName: ladyName?.trim(),
-    };
-  });
+    console.log("🕵️ [BP] Waiting for daily quests popup response...");
 
-  console.log(`👭 Total ladies loaded: ${rows.length}`);
-  console.log("📋 Sample row:", rows[0]);
+    const responsePromise = page.waitForResponse(res =>
+      res.url().includes("/ajax/battlepass/quests.php") &&
+      res.request().method() === "GET" &&
+      res.url().includes("type=getDailyQuestsPopup")
+    );
 
-  if (rows.length === 0) {
-    console.log("❌ No data found in CSV. Exiting.");
-    return;
-  }
+    // Trigger popup (same click user performs)
+    await page.click('[data-popup="daily-quests"]');
 
-  // --------------------------------------------------
-  // STEP 2: PROCESS EACH LADY
-  // --------------------------------------------------
-  for (let i = 0; i < rows.length; i++) {
-    const { profileID, ladyID, ladyName } = rows[i];
+    const response = await responsePromise;
+    const popupData = await response.json();
 
-    console.log(`\n📄 Processing ${i + 1}/${rows.length}`);
-    console.log(`   👩 Name: ${ladyName}`);
-    console.log(`   🆔 Profile ID: ${profileID}`);
-    console.log(`   🎯 Lady ID: ${ladyID}`);
+    console.log("✅ [BP] Popup data received");
 
-    try {
-      // ----------------------------------------------
-      // OPEN PROFILE (USING profileID)
-      // ----------------------------------------------
-      const profileUrl = `https://v3.g.ladypopular.com/profile.php?id=${profileID}`;
-      console.log(`🌐 Opening profile: ${profileUrl}`);
+    // ─────────────────────────────────────────────
+    // PHASE 1 — PARSE REWARDS
+    // ─────────────────────────────────────────────
 
-      await page.goto(profileUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: 60000,
-      });
+    const reward_collections_1 = [];
+    const reward_collections_2 = [];
+    const reward_collections_3 = [];
 
-      await page.waitForTimeout(3000);
-
-      // ----------------------------------------------
-      // SEND VOTE (NETWORK REQUEST)
-      // ----------------------------------------------
-      console.log("🗳️ Sending vote...");
-
-      const voteResponse = await page.evaluate(async ({ ladyID }) => {
-        const res = await fetch('/ajax/ranking/players.php', {
-          method: 'POST',
-          body: new URLSearchParams({
-            action: 'vote',
-            podiumType: '4',
-            ladyId: ladyID,
-            rating: '3',
-          }),
-          credentials: 'same-origin',
-        });
-        return res.json();
-      }, { ladyID });
-
-      console.log("📝 Vote response:", voteResponse);
-
-      if (voteResponse.status !== 1) {
-        console.log(`⚠️ Vote failed for ${ladyName}. Skipping message.`);
-        continue;
+    // ───── TYPE 1 (Pure JSON quests) ─────
+    if (Array.isArray(popupData.dailyQuests)) {
+      for (const quest of popupData.dailyQuests) {
+        if (quest.status === "4") {
+          reward_collections_1.push(quest.id);
+        }
       }
-
-      console.log("✅ Vote successful.");
-
-      // ----------------------------------------------
-      // OPEN CHAT (UI ACTION)
-      // ----------------------------------------------
-      console.log("💬 Opening chat...");
-      await page.waitForSelector('.message-btn', { timeout: 15000 });
-      await page.click('.message-btn');
-
-      // ----------------------------------------------
-      // SEND MESSAGE
-      // ----------------------------------------------
-      await page.waitForSelector('#msgArea', { timeout: 15000 });
-      await page.fill('#msgArea', 'visited you, love the look');
-
-      await page.waitForSelector('#_sendMessageButton', { timeout: 15000 });
-      await page.click('#_sendMessageButton');
-
-      console.log("📨 Message sent successfully.");
-
-    } catch (err) {
-      console.log(`❌ Error processing ${ladyName}: ${err.message}`);
-      await page.screenshot({
-        path: `stats-error-${profileID}.png`,
-        fullPage: true,
-      });
     }
 
-    // ⏳ Small delay to stay safe
-    await page.waitForTimeout(5000);
-  }
+    console.log(`🟦 [BP] Type 1 rewards found: ${reward_collections_1.length}`);
 
-  console.log("\n🏁 Script 2 complete. All rows processed.");
+    // ───── TYPE 2 (HTML daily chests) ─────
+    if (typeof popupData.dailyChests === "string") {
+      const dailyChestHtml = popupData.dailyChests;
+      const dailyChestMatches = [...dailyChestHtml.matchAll(
+        /data-quest="(\d+)"[^>]*data-chest-index="(\d+)"[^>]*class="[^"]*daily-chest semi-opened[^"]*"/g
+      )];
+
+      for (const match of dailyChestMatches) {
+        reward_collections_2.push({
+          quest_id: Number(match[1]),
+          chest_id: Number(match[2]) + 1
+        });
+      }
+    }
+
+    console.log(`🟩 [BP] Type 2 rewards found: ${reward_collections_2.length}`);
+
+    // ───── TYPE 3 (Fashion season rewards) ─────
+    if (typeof popupData.seasonProgress === "string") {
+      const seasonHtml = popupData.seasonProgress;
+
+      const liMatches = [...seasonHtml.matchAll(
+        /<li[^>]*class="([^"]*(level-reached|last-reached)[^"]*)"[^>]*>([\s\S]*?)<\/li>/g
+      )];
+
+      for (const li of liMatches) {
+        const liContent = li[3];
+
+        const levelMatch = liContent.match(/<span class="level">(\d+)<\/span>/);
+        if (!levelMatch) continue;
+
+        const levelNumber = Number(levelMatch[1]);
+
+        // Explicit exclusions
+        if (levelNumber === 25 || levelNumber === 29) continue;
+
+        // Right chest only
+        const rightChestMatch = liContent.match(
+          /<div[^>]*class="[^"]*chest-right[^"]*c(\d+-\d+)[^"]*"[^>]*data-chest-id="(\d+)"/
+        );
+
+        if (!rightChestMatch) continue;
+
+        reward_collections_3.push({
+          chest_css_class: `c${rightChestMatch[1]}`,
+          chest_id: Number(rightChestMatch[2])
+        });
+      }
+    }
+
+    console.log(`🟨 [BP] Type 3 rewards found: ${reward_collections_3.length}`);
+
+    // ─────────────────────────────────────────────
+    // PHASE 2 — COLLECT REWARDS
+    // ─────────────────────────────────────────────
+
+    // ───── TYPE 1 COLLECTION ─────
+    for (const quest_id of reward_collections_1) {
+      console.log(`🎯 [BP] Collecting Type 1 quest ${quest_id}`);
+
+      const res = await page.request.post(
+        "https://v3.g.ladypopular.com/ajax/battlepass/quests.php",
+        {
+          form: {
+            type: "giveDailyQuestReward",
+            quest_id,
+            chest_id: -1
+          }
+        }
+      );
+
+      if (!res.ok()) {
+        console.error(`❌ [BP] Type 1 failed for quest ${quest_id}`);
+        return false;
+      }
+    }
+
+    // ───── TYPE 2 COLLECTION ─────
+    for (const item of reward_collections_2) {
+      console.log(
+        `🎯 [BP] Collecting Type 2 quest ${item.quest_id}, chest ${item.chest_id}`
+      );
+
+      const res = await page.request.post(
+        "https://v3.g.ladypopular.com/ajax/battlepass/quests.php",
+        {
+          form: {
+            type: "giveDailyQuestReward",
+            quest_id: item.quest_id,
+            chest_id: item.chest_id
+          }
+        }
+      );
+
+      if (!res.ok()) {
+        console.error(
+          `❌ [BP] Type 2 failed for quest ${item.quest_id}`
+        );
+        return false;
+      }
+    }
+
+    // ───── TYPE 3 COLLECTION ─────
+    for (const chest of reward_collections_3) {
+      console.log(
+        `🎯 [BP] Collecting Type 3 chest ${chest.chest_id} (${chest.chest_css_class})`
+      );
+
+      const res = await page.request.post(
+        "https://v3.g.ladypopular.com/ajax/battlepass/chest.php",
+        {
+          form: {
+            chest_id: chest.chest_id,
+            chest_css_class: chest.chest_css_class,
+            previousSeason: 0
+          }
+        }
+      );
+
+      if (!res.ok()) {
+        console.error(
+          `❌ [BP] Type 3 failed for chest ${chest.chest_id}`
+        );
+        return false;
+      }
+    }
+
+    console.log("🎉 [BP] All available rewards collected successfully");
+    return true;
+
+  } catch (err) {
+    console.error("🔥 [BP] Fatal error in reward collection sub-code");
+    console.error(err);
+    return false;
+  }
 };
