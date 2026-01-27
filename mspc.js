@@ -2,6 +2,7 @@ require('dotenv').config();
 const { chromium } = require('playwright');
 
 // ⬇️ Import all sub-scripts (exported as functions)..
+const DIVIDER = '────────────────────────────────────────────────────────────────────────────────';
 const runBurnEnergy = require('./burn-energy.js');
 const runTeleportEvent = require('./tele.js');
 const runMapsEvent = require('./maps.js');
@@ -70,45 +71,6 @@ const scripts = [
     }
   }
 
-  // ✅ COOKIE CONSENT
-  const cookieSelectors = [
-    '#accept-all-btn',
-    'button:has-text("Accept All")',
-    'button:has-text("Accept")',
-    'button:has-text("Confirm")',
-    'button:has-text("Agree")',
-  ];
-
-  async function attemptCookieConsent() {
-    console.log("🍪 Looking for cookie consent button...");
-    for (const selector of cookieSelectors) {
-      try {
-        const button = await page.waitForSelector(selector, { timeout: 10000 });
-        await page.waitForTimeout(15000);
-        await button.click();
-        console.log(`🍪 Cookie accepted using selector: ${selector}`);
-        await page.waitForTimeout(10000);
-        return true;
-      } catch {
-        console.log(`🔍 Cookie button not found with selector: ${selector}`);
-      }
-    }
-    return false;
-  }
-
-  let cookieAccepted = await attemptCookieConsent();
-  if (!cookieAccepted) {
-    console.log("🔁 Cookie button not found. Refreshing and retrying...");
-    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForTimeout(5000);
-    cookieAccepted = await attemptCookieConsent();
-  }
-  
-  if (!cookieAccepted) {
-    console.log("❌ Failed to accept cookie even after retry. Continuing anyway...");
-    await page.screenshot({ path: 'cookie-error.png', fullPage: true });
-  }
-
   // ✅ RUN EACH SCRIPT
   for (const script of scripts) {
     const shouldRun =
@@ -123,15 +85,18 @@ const scripts = [
     try {
       await script.fn(page); // Call the script function with shared page
       console.log(`✅ ${script.name} finished successfully.`);
+      console.log(DIVIDER);
     } catch (err) {
       console.log(`❌ ${script.name} failed: ${err.message}`);
       await page.screenshot({ path: `${script.name.replace(/\s+/g, '_')}-error.png`, fullPage: true });
+      console.log(DIVIDER);
     }
   }
 
   await browser.close();
   console.log(`\n🎉 All scripts done. Browser closed.`);
 })();
+
 
 
 
